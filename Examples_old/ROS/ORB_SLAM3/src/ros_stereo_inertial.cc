@@ -34,6 +34,17 @@
 #include"../../../include/System.h"
 #include"../include/ImuTypes.h"
 
+//for pubbing
+#include <nav_msgs/Path.h>
+#include <geometry_msgs/PoseStamped.h>
+#include <geometry_msgs/Point.h>
+#include <geometry_msgs/Quaternion.h>
+#include <tf/transform_broadcaster.h>
+#include <Eigen/Dense>
+#include <opencv2/core/eigen.hpp>
+#include <opencv2/opencv.hpp>
+
+
 using namespace std;
 
 class ImuGrabber
@@ -67,6 +78,14 @@ public:
 
     const bool mbClahe;
     cv::Ptr<cv::CLAHE> mClahe = cv::createCLAHE(3.0, cv::Size(8, 8));
+
+    // for publish
+    cv::Mat m1, m2;
+    bool pub_tf, pub_pose;
+    ros::NodeHandle nh;
+    ros::Publisher pose_pub = nh.advertise<geometry_msgs::PoseStamped>("pose_topic", 10);
+    ros::Publisher trajectory_pub = nh.advertise<nav_msgs::Path>("trajectory", 1, true);
+
 };
 
 
@@ -196,10 +215,17 @@ cv::Mat ImageGrabber::GetImage(const sensor_msgs::ImageConstPtr &img_msg)
 void ImageGrabber::SyncWithImu()
 {
   const double maxTimeDiff = 0.01;
+
+  nav_msgs::Path trajectory;
+  trajectory.header.stamp = ros::Time::now();
+  trajectory.header.frame_id = "odom";
+
+
   while(1)
   {
     cv::Mat imLeft, imRight;
     double tImLeft = 0, tImRight = 0;
+
     if (!imgLeftBuf.empty()&&!imgRightBuf.empty()&&!mpImuGb->imuBuf.empty())
     {
       tImLeft = imgLeftBuf.front()->header.stamp.toSec();
@@ -267,7 +293,36 @@ void ImageGrabber::SyncWithImu()
         cv::remap(imRight,imRight,M1r,M2r,cv::INTER_LINEAR);
       }
 
-      mpSLAM->TrackStereo(imLeft,imRight,tImLeft,vImuMeas);
+      // mpSLAM->TrackStereo(imLeft,imRight,tImLeft,vImuMeas);
+
+      // for publish
+      cv::Mat Tcw;      
+      Sophus::SE3f Tcw_SE3f=mpSLAM->TrackStereo(imLeft,imRight,tImLeft,vImuMeas);
+      Eigen::Matrix4f Tcw_Matrix = Tcw_SE3f.matrix();
+      cv::eigen2cv(Tcw_Matrix, Tcw);
+      geometry_msgs::PoseStamped poseMSG;
+      if(!Tcw.empty())
+      {
+    
+          cv::Mat Rwc = Tcw.rowRange(0,3).colRange(0,3).t();
+          cv::Mat twc = -Rwc*Tcw.rowRange(0,3).col(3);
+          vector<float> q = ORB_SLAM3::Converter::toQuaternion(Rwc);
+          poseMSG.pose.position.x = - twc.at<float>(0);
+          poseMSG.pose.position.y = -twc.at<float>(2);
+          poseMSG.pose.position.z = twc.at<float>(1);
+          poseMSG.pose.orientation.x = q[0];
+          poseMSG.pose.orientation.y = q[1];
+          poseMSG.pose.orientation.z = q[2];
+          poseMSG.pose.orientation.w = q[3];
+          poseMSG.header.frame_id = "odom";
+          poseMSG.header.stamp = ros::Time::now();
+          pose_pub.publish(poseMSG);
+
+          trajectory.poses.push_back(poseMSG);
+          cout <<trajectory.poses.size()<< endl;
+          trajectory_pub.publish(trajectory);
+
+      }
 
       std::chrono::milliseconds tSleep(1);
       std::this_thread::sleep_for(tSleep);

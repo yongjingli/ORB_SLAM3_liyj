@@ -39,7 +39,17 @@ using namespace std;
 
 namespace ORB_SLAM3
 {
-
+// mTrackedFr(0) 这个变量记录了当前已经成功跟踪的帧数。 初始值为 0，表示尚未跟踪到任何帧
+// mbStep 当 mbStep 被设置为 true 时,表示系统进入了逐步调试模式。在这种模式下,SLAM 系统会在每一步暂停,等待用户的手动操作或输入,以便于开发者进行调试和分析。这对于理解和分析SLAM系统的内部工作机制非常有帮助。
+// mbOnlyTracking 仅进行跟踪
+// mbMapUpdated 是否进行地图更新
+// mbVO 当 mbVO 为 true 时,表示系统当前处于 Visual Odometry 模式,而不是完整的 SLAM 模式。
+// 在 VO 模式下,系统的行为可能会有所不同。例如,可能不会进行全局地图优化、闭环检测等复杂的 SLAM 功能,而只专注于通过视觉里程计进行本地位姿估计。
+// bStepByStep与mbStep类似
+// mnLastRelocFrameId 表示最近一次成功的重定位操作所用到的关键帧的ID。
+// time_recently_lost 记录了系统最近一次丢失跟踪的时间戳
+// mbCreatedMap 表示系统是否已经创建了地图
+// mpLastKeyFrame 指向最近一个被添加到地图中的关键帧
 
 Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer, Atlas *pAtlas, KeyFrameDatabase* pKFDB, const string &strSettingPath, const int sensor, Settings* settings, const string &_nameSeq):
     mState(NO_IMAGES_YET), mSensor(sensor), mTrackedFr(0), mbStep(false),
@@ -94,9 +104,9 @@ Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer,
         }
     }
 
-    initID = 0; lastID = 0;
-    mbInitWith3KFs = false;
-    mnNumDataset = 0;
+    initID = 0; lastID = 0;  // 初始化的第一个关键帧的 ID  最后一个被处理的关键帧的 ID
+    mbInitWith3KFs = false;  // 表示 SLAM 系统是否应该使用 3 个关键帧来进行初始化
+    mnNumDataset = 0;  // 跟踪 SLAM 系统处理的数据集的数  初始化为 0,表示还没有处理任何数据集
 
     vector<GeometricCamera*> vpCams = mpAtlas->GetAllCameras();
     std::cout << "There are " << vpCams.size() << " cameras in the atlas" << std::endl;
@@ -534,7 +544,7 @@ Tracking::~Tracking()
 
 void Tracking::newParameterLoader(Settings *settings) {
     mpCamera = settings->camera1();
-    mpCamera = mpAtlas->AddCamera(mpCamera);
+    mpCamera = mpAtlas->AddCamera(mpCamera);    // 相机包括类型和内参等数据
 
     if(settings->needToUndistort()){
         mDistCoef = settings->camera1DistortionCoef();
@@ -563,17 +573,20 @@ void Tracking::newParameterLoader(Settings *settings) {
         mpCamera2 = settings->camera2();
         mpCamera2 = mpAtlas->AddCamera(mpCamera2);
 
-        mTlr = settings->Tlr();
+        mTlr = settings->Tlr();    // Transformation matrix between cameras in stereo fisheye,左相机到右相机的变换矩阵
 
         mpFrameDrawer->both = true;
     }
 
     if(mSensor==System::STEREO || mSensor==System::RGBD || mSensor==System::IMU_STEREO || mSensor==System::IMU_RGBD ){
-        mbf = settings->bf();
+        mbf = settings->bf();   // 基线距离（单位：米） * fx（单位：像素）
+        // 这是一个深度阈值，用于区分哪些特征点是近点，哪些是远点。
+        // 双目关键点的深度如果小于40倍基线长度的值，就被叫做近关键点，否则就是远关键点。近关键点可以较好的被三角化，并提供尺度，平移，旋转信息。而远关键点可以提供比较好的旋转信息，但只能有比较差的尺度和平移信息，远点用多视角进行三角化
         mThDepth = settings->b() * settings->thDepth();
     }
 
     if(mSensor==System::RGBD || mSensor==System::IMU_RGBD){
+        // DepthMapFactor是一个比例系数，根据TUM数据集官网的说明，对于RGB-D数据集，深度图像的缩放系数为5000，即深度图像中的像素值为5000，对应于离摄像机1米的距离，10000对应于2米的距离，
         mDepthMapFactor = settings->depthMapFactor();
         if(fabs(mDepthMapFactor)<1e-5)
             mDepthMapFactor=1;
@@ -581,29 +594,29 @@ void Tracking::newParameterLoader(Settings *settings) {
             mDepthMapFactor = 1.0f/mDepthMapFactor;
     }
 
-    mMinFrames = 0;
-    mMaxFrames = settings->fps();
-    mbRGB = settings->rgb();
+    mMinFrames = 0; // 这个变量表示跟踪过程中最小需要的帧数。将其设置为 0 表示不对最小帧数做任何限制。
+    mMaxFrames = settings->fps();  // 这个变量表示跟踪过程中最大允许的帧数
+    mbRGB = settings->rgb();   // 这个变量表示相机输出的图像通道顺序是 RGB 还是 BGR
 
     //ORB parameters
-    int nFeatures = settings->nFeatures();
-    int nLevels = settings->nLevels();
-    int fIniThFAST = settings->initThFAST();
-    int fMinThFAST = settings->minThFAST();
-    float fScaleFactor = settings->scaleFactor();
+    int nFeatures = settings->nFeatures();   // 变量表示要提取的特征点数量
+    int nLevels = settings->nLevels();       // 表示 ORB 特征提取的金字塔层数
+    int fIniThFAST = settings->initThFAST();   // 表示 FAST 特征点检测器的初始阈值
+    int fMinThFAST = settings->minThFAST();    // 表示 FAST 特征点检测器的最小阈值
+    float fScaleFactor = settings->scaleFactor();  // 表示 ORB 特征金字塔的尺度因子
 
-    mpORBextractorLeft = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+    mpORBextractorLeft = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);  // 左目
 
     if(mSensor==System::STEREO || mSensor==System::IMU_STEREO)
-        mpORBextractorRight = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+        mpORBextractorRight = new ORBextractor(nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);  // 右目
 
     if(mSensor==System::MONOCULAR || mSensor==System::IMU_MONOCULAR)
-        mpIniORBextractor = new ORBextractor(5*nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST);
+        mpIniORBextractor = new ORBextractor(5*nFeatures,fScaleFactor,nLevels,fIniThFAST,fMinThFAST); // 单目
 
     //IMU parameters
-    Sophus::SE3f Tbc = settings->Tbc();
+    Sophus::SE3f Tbc = settings->Tbc();   // IMU外参, body-frame (imu) 到相机的转换Tbc
     mInsertKFsLost = settings->insertKFsWhenLost();
-    mImuFreq = settings->imuFrequency();
+    mImuFreq = settings->imuFrequency();   // 表示是否在跟踪丢失时插入关键帧
     mImuPer = 0.001; //1.0 / (double) mImuFreq;     //TODO: ESTO ESTA BIEN?
     float Ng = settings->noiseGyro();
     float Na = settings->noiseAcc();
@@ -611,9 +624,12 @@ void Tracking::newParameterLoader(Settings *settings) {
     float Naw = settings->accWalk();
 
     const float sf = sqrt(mImuFreq);
-    mpImuCalib = new IMU::Calib(Tbc,Ng*sf,Na*sf,Ngw/sf,Naw/sf);
+    mpImuCalib = new IMU::Calib(Tbc,Ng*sf,Na*sf,Ngw/sf,Naw/sf);  //  IMU::Calib 类的实例,用于表示 IMU 的校准参数
 
-    mpImuPreintegratedFromLastKF = new IMU::Preintegrated(IMU::Bias(),*mpImuCalib);
+    // 用于存储从上一个关键帧到当前帧的 IMU 预积分结果
+    // IMU::Bias(): 一个初始化为零的 IMU 偏置。
+    // *mpImuCalib: 上一步创建的 IMU 校准参数实例。
+    mpImuPreintegratedFromLastKF = new IMU::Preintegrated(IMU::Bias(),*mpImuCalib);  
 }
 
 bool Tracking::ParseCamParamFile(cv::FileStorage &fSettings)
@@ -1489,7 +1505,7 @@ Sophus::SE3f Tracking::GrabImageStereo(const cv::Mat &imRectLeft, const cv::Mat 
     }
 
     //cout << "Incoming frame creation" << endl;
-
+    // 这个是构造函数返回类对象，并不是函数,所以没有返回值
     if (mSensor == System::STEREO && !mpCamera2)
         mCurrentFrame = Frame(mImGray,imGrayRight,timestamp,mpORBextractorLeft,mpORBextractorRight,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth,mpCamera);
     else if(mSensor == System::STEREO && mpCamera2)
@@ -1725,8 +1741,8 @@ void Tracking::PreintegrateIMU()
         pImuPreintegratedFromLastFrame->IntegrateNewMeasurement(acc,angVel,tstep);
     }
 
-    mCurrentFrame.mpImuPreintegratedFrame = pImuPreintegratedFromLastFrame;
-    mCurrentFrame.mpImuPreintegrated = mpImuPreintegratedFromLastKF;
+    mCurrentFrame.mpImuPreintegratedFrame = pImuPreintegratedFromLastFrame;  // 上一帧的 IMU 预积分结果赋值给当前帧的 mpImuPreintegratedFrame
+    mCurrentFrame.mpImuPreintegrated = mpImuPreintegratedFromLastKF;         // 将最后一个关键帧的 IMU 预积分结果赋值给当前帧的
     mCurrentFrame.mpLastKeyFrame = mpLastKeyFrame;
 
     mCurrentFrame.setIntegrated();
@@ -1793,7 +1809,8 @@ void Tracking::ResetFrameIMU()
 
 void Tracking::Track()
 {
-
+    
+    // 调试等待
     if (bStepByStep)
     {
         std::cout << "Tracking: Waiting to the next step" << std::endl;
@@ -1802,6 +1819,7 @@ void Tracking::Track()
         mbStep = false;
     }
 
+    // 局部优化器检测到IMU数据存在问题,会重置当前活动地图
     if(mpLocalMapper->mbBadImu)
     {
         cout << "TRACK: Reset map because local mapper set the bad imu flag " << endl;
@@ -1809,14 +1827,17 @@ void Tracking::Track()
         return;
     }
 
+    // 得到当前地图
     Map* pCurrentMap = mpAtlas->GetCurrentMap();
     if(!pCurrentMap)
     {
         cout << "ERROR: There is not an active map in the atlas" << endl;
     }
 
+    // 如果存在图像的输入,则执行进一步的处理
     if(mState!=NO_IMAGES_YET)
     {
+        // 负责处理当前帧与上一帧之间存在时间戳跳跃, 如果当前帧的时间戳比上一帧的更旧,说明出现了错误,系统会执行以下清空IMU队列, 在地图集(Atlas)中创建一个新的地图, 函数返回,停止当前的处理过程等操作处理
         if(mLastFrame.mTimeStamp>mCurrentFrame.mTimeStamp)
         {
             cerr << "ERROR: Frame with a timestamp older than previous frame detected!" << endl;
@@ -1825,6 +1846,7 @@ void Tracking::Track()
             CreateMapInAtlas();
             return;
         }
+        // 如果距离上一帧的时间过长,需要进行异常处理,需要判断是否有用到imu,如果用到而且imu还没有初始化好,那么就需要重置当前的活动地图
         else if(mCurrentFrame.mTimeStamp>mLastFrame.mTimeStamp+1.0)
         {
             // cout << mCurrentFrame.mTimeStamp << ", " << mLastFrame.mTimeStamp << endl;
@@ -1835,19 +1857,19 @@ void Tracking::Track()
                 if(mpAtlas->isImuInitialized())
                 {
                     cout << "Timestamp jump detected. State set to LOST. Reseting IMU integration..." << endl;
-                    if(!pCurrentMap->GetIniertialBA2())
+                    if(!pCurrentMap->GetIniertialBA2())   // 是否启用了惯性平衡优化 BA2,如果还没使用, 则重置当前的活跃地图即可
                     {
                         mpSystem->ResetActiveMap();
                     }
                     else
                     {
-                        CreateMapInAtlas();
+                        CreateMapInAtlas();  // 如果已经启用了惯性平衡优化BA2,则将当前地图保存后，重新创建一个新的地图
                     }
                 }
                 else
                 {
                     cout << "Timestamp jump detected, before IMU initialization. Reseting..." << endl;
-                    mpSystem->ResetActiveMap();
+                    mpSystem->ResetActiveMap();   // 如果当前的地图还没有进行imu的预积分, 重置当前的活跃地图即可
                 }
                 return;
             }
@@ -1855,7 +1877,9 @@ void Tracking::Track()
         }
     }
 
-
+    // IMU的bias在不同的时刻是不一样的, 需要根据上一帧的imu来进行纠偏
+    // 将上一个关键帧(mpLastKeyFrame)的IMU偏差(IMU bias)赋值给当前帧(mCurrentFrame)的IMU偏差
+    // 在SLAM(Simultaneous Localization and Mapping)系统中,IMU(Inertial Measurement Unit)数据可以帮助提高定位和建图的精度。但是,IMU传感器本身也会存在一些偏差,这些偏差需要被校正和补偿。
     if ((mSensor == System::IMU_MONOCULAR || mSensor == System::IMU_STEREO || mSensor == System::IMU_RGBD) && mpLastKeyFrame)
         mCurrentFrame.SetNewBias(mpLastKeyFrame->GetImuBias());
 
@@ -1871,6 +1895,7 @@ void Tracking::Track()
 #ifdef REGISTER_TIMES
         std::chrono::steady_clock::time_point time_StartPreIMU = std::chrono::steady_clock::now();
 #endif
+        // 从上一帧到当前帧之间的所有IMU测量数据(角速度和加速度)进行积分,计算出位置、速度和姿态的变化量
         PreintegrateIMU();
 #ifdef REGISTER_TIMES
         std::chrono::steady_clock::time_point time_EndPreIMU = std::chrono::steady_clock::now();
@@ -1883,6 +1908,7 @@ void Tracking::Track()
     mbCreatedMap = false;
 
     // Get Map Mutex -> Map cannot be changed
+    // 更新地图和检测地图是否发生变化
     unique_lock<mutex> lock(pCurrentMap->mMutexMapUpdate);
 
     mbMapUpdated = false;
@@ -1909,7 +1935,7 @@ void Tracking::Track()
 
         //mpFrameDrawer->Update(this);
 
-        if(mState!=OK) // If rightly initialized, mState=OK
+        if(mState!=OK) // If rightly initialized, mState=OK  初始化不成功得话,将mLastFrame设置为当前帧后就直接返回进行下步处理
         {
             mLastFrame = Frame(mCurrentFrame);
             return;
@@ -2047,12 +2073,15 @@ void Tracking::Track()
                 if(!mbVO)
                 {
                     // In last frame we tracked enough MapPoints in the map
+                    // 件检查是否已经有了运动模型
                     if(mbVelocity)
                     {
+                        // 如果有运动模型,则使用运动模型进行跟踪
                         bOK = TrackWithMotionModel();
                     }
                     else
                     {
+                        // 如果没有运动模型,则使用参考关键帧进行跟踪
                         bOK = TrackReferenceKeyFrame();
                     }
                 }
@@ -2124,6 +2153,7 @@ void Tracking::Track()
         {
             if(bOK)
             {
+                // 进行局部跟踪
                 bOK = TrackLocalMap();
 
             }
@@ -2139,6 +2169,8 @@ void Tracking::Track()
                 bOK = TrackLocalMap();
         }
 
+        
+        // 根据bOK来设置mState的状态OK或者RECENTLY_LOST
         if(bOK)
             mState = OK;
         else if (mState == OK)
@@ -2176,6 +2208,7 @@ void Tracking::Track()
             pF->mpImuPreintegratedFrame = new IMU::Preintegrated(mCurrentFrame.mpImuPreintegratedFrame);
         }
 
+        // 检测并处理IMU（惯性测量单元）初始化的情况
         if(pCurrentMap->isImuInitialized())
         {
             if(bOK)
@@ -2296,7 +2329,7 @@ void Tracking::Track()
 
 
 
-
+    // 记录当前帧相对上一帧的位姿、参考的关键帧数、时间戳和状态等,在RECENTLY_LOST的状态下(为加入相对上一帧的位姿、参考的关键帧数、时间戳)
     if(mState==OK || mState==RECENTLY_LOST)
     {
         // Store frame pose information to retrieve the complete camera trajectory afterwards.

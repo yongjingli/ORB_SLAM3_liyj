@@ -38,6 +38,9 @@ namespace ORB_SLAM3
 
 Verbose::eLevel Verbose::th = Verbose::VERBOSITY_NORMAL;
 
+// const int initFr:这个参数指定了 ORB-SLAM3 系统的初始帧号。这在处理预录制的序列或数据集时很有用,默认值为0
+// const string &strSequence:这个参数指定了输入序列或数据集的名称或标识符。这些信息可用于日志记录和整理输出数据。默认值为''
+
 System::System(const string &strVocFile, const string &strSettingsFile, const eSensor sensor,
                const bool bUseViewer, const int initFr, const string &strSequence):
     mSensor(sensor), mpViewer(static_cast<Viewer*>(NULL)), mbReset(false), mbResetActiveMap(false),
@@ -75,13 +78,14 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     }
 
     cv::FileNode node = fsSettings["File.version"];
+    // mStrLoadAtlasFromFile 为初始化时加载地图的路径
+    // mStrSaveAtlasToFile 为保存地图的路径, 一般在系统shutdown的时候调用
     if(!node.empty() && node.isString() && node.string() == "1.0"){
-        settings_ = new Settings(strSettingsFile,mSensor);
+        settings_ = new Settings(strSettingsFile,mSensor);       // 读取setting文件里的信息
 
         mStrLoadAtlasFromFile = settings_->atlasLoadFile();
         mStrSaveAtlasToFile = settings_->atlasSaveFile();
 
-        cout << (*settings_) << endl;
     }
     else{
         settings_ = nullptr;
@@ -98,18 +102,18 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
         }
     }
 
-    node = fsSettings["loopClosing"];
+    node = fsSettings["loopClosing"];  // EuRoC.yaml中没有这个的设置 
     bool activeLC = true;
     if(!node.empty())
     {
         activeLC = static_cast<int>(fsSettings["loopClosing"]) != 0;
     }
 
-    mStrVocabularyFilePath = strVocFile;
+    mStrVocabularyFilePath = strVocFile;    // 读取词典的路径
 
     bool loadedAtlas = false;
 
-    if(mStrLoadAtlasFromFile.empty())
+    if(mStrLoadAtlasFromFile.empty())       // 如果atlas的路径为空,就不需加载atlas地图
     {
         //Load ORB Vocabulary
         cout << endl << "Loading ORB Vocabulary. This could take a while..." << endl;
@@ -129,7 +133,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
 
         //Create the Atlas
         cout << "Initialization of Atlas from scratch " << endl;
-        mpAtlas = new Atlas(0);
+        mpAtlas = new Atlas(0);     // 创建atlas管理,如果是加载atlas的话, 在初始化时创建一个新的地图 mpAtlas->CreateNewMap();
     }
     else
     {
@@ -179,18 +183,21 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
 
 
     if (mSensor==IMU_STEREO || mSensor==IMU_MONOCULAR || mSensor==IMU_RGBD)
-        mpAtlas->SetInertialSensor();
+        mpAtlas->SetInertialSensor();   // 将atlas的当前地图的imu设置为true, mpAtlas.mpCurrentMap.mbImuInitialized = true
 
     //Create Drawers. These are used by the Viewer
-    mpFrameDrawer = new FrameDrawer(mpAtlas);
-    mpMapDrawer = new MapDrawer(mpAtlas, strSettingsFile, settings_);
-
+    mpFrameDrawer = new FrameDrawer(mpAtlas);                           // frame的可视化初始化需要传入atlas
+    mpMapDrawer = new MapDrawer(mpAtlas, strSettingsFile, settings_);   // map的可视化初始化需要传入atlas以及相关的setting
+ 
     //Initialize the Tracking thread
     //(it will live in the main thread of execution, the one that called this constructor)
+    // tracker的初始化
     cout << "Seq. Name: " << strSequence << endl;
     mpTracker = new Tracking(this, mpVocabulary, mpFrameDrawer, mpMapDrawer,
-                             mpAtlas, mpKeyFrameDatabase, strSettingsFile, mSensor, settings_, strSequence);
+                             mpAtlas, mpKeyFrameDatabase, strSettingsFile, mSensor, settings_, strSequence);    
 
+
+    // local mapper的初始化
     //Initialize the Local Mapping thread and launch
     mpLocalMapper = new LocalMapping(this, mpAtlas, mSensor==MONOCULAR || mSensor==IMU_MONOCULAR,
                                      mSensor==IMU_MONOCULAR || mSensor==IMU_STEREO || mSensor==IMU_RGBD, strSequence);
@@ -208,11 +215,14 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
     else
         mpLocalMapper->mbFarPoints = false;
 
+    // loopclosing的初始化
     //Initialize the Loop Closing thread and launch
     // mSensor!=MONOCULAR && mSensor!=IMU_MONOCULAR
     mpLoopCloser = new LoopClosing(mpAtlas, mpKeyFrameDatabase, mpVocabulary, mSensor!=MONOCULAR, activeLC); // mSensor!=MONOCULAR);
     mptLoopClosing = new thread(&ORB_SLAM3::LoopClosing::Run, mpLoopCloser);
 
+    
+    // 三个主要线程之间的相互设置
     //Set pointers between threads
     mpTracker->SetLocalMapper(mpLocalMapper);
     mpTracker->SetLoopClosing(mpLoopCloser);
@@ -225,6 +235,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
 
     //usleep(10*1000*1000);
 
+    // 设置viewer
     //Initialize the Viewer thread and launch
     if(bUseViewer)
     //if(false) // TODO
@@ -236,6 +247,7 @@ System::System(const string &strVocFile, const string &strSettingsFile, const eS
         mpViewer->both = mpFrameDrawer->both;
     }
 
+    // 设置日志信息
     // Fix verbosity
     Verbose::SetTh(Verbose::VERBOSITY_QUIET);
 
@@ -520,7 +532,7 @@ void System::Shutdown()
     }
 
     cout << "Shutdown" << endl;
-
+    
     mpLocalMapper->RequestFinish();
     mpLoopCloser->RequestFinish();
     /*if(mpViewer)
@@ -547,9 +559,11 @@ void System::Shutdown()
 
     if(!mStrSaveAtlasToFile.empty())
     {
+        cout << "mStrSaveAtlasToFile" << endl;
         Verbose::PrintMess("Atlas saving to file " + mStrSaveAtlasToFile, Verbose::VERBOSITY_NORMAL);
         SaveAtlas(FileType::BINARY_FILE);
     }
+    cout << "Done" << endl;
 
     /*if(mpViewer)
         pangolin::BindToContext("ORB-SLAM2: Map Viewer");*/
@@ -557,7 +571,6 @@ void System::Shutdown()
 #ifdef REGISTER_TIMES
     mpTracker->PrintTimeStats();
 #endif
-
 
 }
 
@@ -684,13 +697,13 @@ void System::SaveTrajectoryEuRoC(const string &filename)
     }
 
     vector<KeyFrame*> vpKFs = pBiggerMap->GetAllKeyFrames();
-    sort(vpKFs.begin(),vpKFs.end(),KeyFrame::lId);
+    sort(vpKFs.begin(),vpKFs.end(),KeyFrame::lId); //第一帧的位姿，也是世界坐标系
 
     // Transform all keyframes so that the first keyframe is at the origin.
     // After a loop closure the first keyframe might not be at the origin.
     Sophus::SE3f Twb; // Can be word to cam0 or world to b depending on IMU or not.
     if (mSensor==IMU_MONOCULAR || mSensor==IMU_STEREO || mSensor==IMU_RGBD)
-        Twb = vpKFs[0]->GetImuPose();
+        Twb = vpKFs[0]->GetImuPose();  // mTcw.inverse() * mImuCalib.mTcb; Tcw代表cam到世界坐标  mTcb代表世界坐标到body系(这里应该就是指IMU)
     else
         Twb = vpKFs[0]->GetPoseInverse();
 
@@ -699,50 +712,68 @@ void System::SaveTrajectoryEuRoC(const string &filename)
     // cout << "file open" << endl;
     f << fixed;
 
+    ofstream f_global;
+    std::size_t dot_pos = filename.find_last_of(".");
+    std::string global_filename = filename.substr(0, dot_pos) + "_global" + filename.substr(dot_pos);
+    f_global.open(global_filename.c_str());
+    f_global << fixed;
+
     // Frame pose is stored relative to its reference keyframe (which is optimized by BA and pose graph).
     // We need to get first the keyframe pose and then concatenate the relative transformation.
     // Frames not localized (tracking failure) are not saved.
 
+     //每一帧都有一个参考关键帧，相对于参考关键帧有一个相对位姿，所以每一帧的位姿是按相对参考关键帧位姿保存的
+     //这样保存的目的在于：关键帧位姿在localmapping中是不断调整的，所以认为更加准确，如果直接保存
+     //Frame的位姿，那就没那么准确
+
     // For each frame we have a reference keyframe (lRit), the timestamp (lT) and a flag
     // which is true when tracking failed (lbL).
-    list<ORB_SLAM3::KeyFrame*>::iterator lRit = mpTracker->mlpReferences.begin();
-    list<double>::iterator lT = mpTracker->mlFrameTimes.begin();
-    list<bool>::iterator lbL = mpTracker->mlbLost.begin();
+    list<ORB_SLAM3::KeyFrame*>::iterator lRit = mpTracker->mlpReferences.begin();   //参考关键帧
+    list<double>::iterator lT = mpTracker->mlFrameTimes.begin();   //时间戳
+    list<bool>::iterator lbL = mpTracker->mlbLost.begin();    //是否跟踪失败
 
     //cout << "size mlpReferences: " << mpTracker->mlpReferences.size() << endl;
     //cout << "size mlRelativeFramePoses: " << mpTracker->mlRelativeFramePoses.size() << endl;
     //cout << "size mpTracker->mlFrameTimes: " << mpTracker->mlFrameTimes.size() << endl;
     //cout << "size mpTracker->mlbLost: " << mpTracker->mlbLost.size() << endl;
 
-
+    // Twb为第一帧的世界坐标到body坐标系 
+    //相对参考关键帧的位姿
     for(auto lit=mpTracker->mlRelativeFramePoses.begin(),
         lend=mpTracker->mlRelativeFramePoses.end();lit!=lend;lit++, lRit++, lT++, lbL++)
     {
-        //cout << "1" << endl;
+        // lit 代表处理的每帧相对关键帧的位姿
+        
+        //cout << "1" << endl;  代表是否是LOST的状态, 如果是则不输出定位位姿
         if(*lbL)
             continue;
 
 
-        KeyFrame* pKF = *lRit;
+        KeyFrame* pKF = *lRit;    // 代表参考的关键帧
         //cout << "KF: " << pKF->mnId << endl;
 
         Sophus::SE3f Trw;
 
         // If the reference keyframe was culled, traverse the spanning tree to get a suitable keyframe.
+        
         if (!pKF)
             continue;
 
         //cout << "2.5" << endl;
 
+        //如果参考关键帧是坏的(可能是检查冗余时被剔除了)，则用其父帧，并记录父帧到原参考关键帧的位姿变换
+        // 如果参考关键帧isbad，则遍历生成树以获取合适的关键帧。
         while(pKF->isBad())
         {
-            //cout << " 2.bad" << endl;
+            //cout << " 2.bad" << endl;  
+            // mTcp 为当前关键帧相对parent帧的pose Pose relative to parent (this is computed when bad flag is activated)
+            // 通过递归的方式得到相对好的关键帧的pose
             Trw = Trw * pKF->mTcp;
             pKF = pKF->GetParent();
             //cout << "--Parent KF: " << pKF->mnId << endl;
         }
 
-        if(!pKF || pKF->GetMap() != pBiggerMap)
+        if(!pKF || pKF->GetMap() != pBiggerMap)    // 如果不是最大的地图里的也不输出
         {
             //cout << "--Parent KF is from another map" << endl;
             continue;
@@ -750,16 +781,31 @@ void System::SaveTrajectoryEuRoC(const string &filename)
 
         //cout << "3" << endl;
 
-        Trw = Trw * pKF->GetPose()*Twb; // Tcp*Tpw*Twb0=Tcb0 where b0 is the new world reference
+        // Trw_Global 在地图的世界坐标
+        Sophus::SE3f Trw_Global;
+        Trw_Global = Trw * pKF->GetPose();
+
+        //参考关键帧的位姿, 参考关键帧到世界坐标(以第一帧的坐标为世界坐标系)
+        Trw = Trw * pKF->GetPose()*Twb; // Tcp*Tpw*Twb0=Tcb0 where b0 is the new world reference  mTcw
 
         // cout << "4" << endl;
+        // cout<< "Twb1:" << Twb.translation() << endl;
 
         if (mSensor == IMU_MONOCULAR || mSensor == IMU_STEREO || mSensor==IMU_RGBD)
         {
-            Sophus::SE3f Twb = (pKF->mImuCalib.mTbc * (*lit) * Trw).inverse();
+            // 在条件分支内部,Trw 是一个局部变量,它的值只会影响到 Twb 的计算过程,不会影响到外部的 Trw 变量。
+            // 也就是说,即使在条件分支内部修改了 Trw 的值,外部的 Trw 变量也不会发生变化。
+            Sophus::SE3f Twb = (pKF->mImuCalib.mTbc * (*lit) * Trw).inverse();     // 当前帧的body坐标系到word(第一帧的坐标为世界坐标)
             Eigen::Quaternionf q = Twb.unit_quaternion();
             Eigen::Vector3f twb = Twb.translation();
             f << setprecision(6) << 1e9*(*lT) << " " <<  setprecision(9) << twb(0) << " " << twb(1) << " " << twb(2) << " " << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << endl;
+        
+            // Pose in global map
+            Twb = (pKF->mImuCalib.mTbc * (*lit) * Trw_Global).inverse();     // 当前帧的body坐标系到word(第一帧的坐标为世界坐标)
+            q = Twb.unit_quaternion();
+            twb = Twb.translation();
+            f_global << setprecision(6) << 1e9*(*lT) << " " <<  setprecision(9) << twb(0) << " " << twb(1) << " " << twb(2) << " " << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << endl;
+        
         }
         else
         {
@@ -767,8 +813,10 @@ void System::SaveTrajectoryEuRoC(const string &filename)
             Eigen::Quaternionf q = Twc.unit_quaternion();
             Eigen::Vector3f twc = Twc.translation();
             f << setprecision(6) << 1e9*(*lT) << " " <<  setprecision(9) << twc(0) << " " << twc(1) << " " << twc(2) << " " << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << endl;
+            
         }
 
+        
         // cout << "5" << endl;
     }
     //cout << "end saving trajectory" << endl;
@@ -1364,18 +1412,24 @@ bool System::isFinished()
     return (GetTimeFromIMUInit()>0.1);
 }
 
+// 用于在不同数据集之间切换
 void System::ChangeDataset()
 {
+    // ResetActiveMap() 会完全清除当前地图,而 CreateMapInAtlas() 会在保留之前地图信息的基础上创建一个新的地图实例
+    // 如果当前地图中的关键帧数量小于 12 个,说明这个地图可能过小或不足以进行有效的跟踪和重定位。
     if(mpAtlas->GetCurrentMap()->KeyFramesInMap() < 12)
     {
-        mpTracker->ResetActiveMap();
+        mpTracker->ResetActiveMap();   // 调用 ResetActiveMap() 来重置当前激活的地图
     }
     else
     {
+        // 如果当前地图中的关键帧数量大于或等于 12 个,说明这个地图已经足够大,可以进行有效的跟踪和重定位
+        // 在这种情况下,函数会调用 CreateMapInAtlas() 来在地图集 (Atlas) 中创建一个新的地图
         mpTracker->CreateMapInAtlas();
     }
 
-    mpTracker->NewDataset();
+    // 用于通知 SLAM 系统切换到新的数据集,重置一些内部状态和参数
+    mpTracker->NewDataset();   // mnNumDataset++ 只是进行了一个数据集数量+1的操作
 }
 
 float System::GetImageScale()
@@ -1408,9 +1462,12 @@ void System::SaveAtlas(int type){
         // Save the current session
         mpAtlas->PreSave();
 
-        string pathSaveFileName = "./";
+        // string pathSaveFileName = "./";
+        string pathSaveFileName = "";
+        
         pathSaveFileName = pathSaveFileName.append(mStrSaveAtlasToFile);
         pathSaveFileName = pathSaveFileName.append(".osa");
+
 
         string strVocabularyChecksum = CalculateCheckSum(mStrVocabularyFilePath,TEXT_FILE);
         std::size_t found = mStrVocabularyFilePath.find_last_of("/\\");
@@ -1447,7 +1504,8 @@ bool System::LoadAtlas(int type)
     string strFileVoc, strVocChecksum;
     bool isRead = false;
 
-    string pathLoadFileName = "./";
+    // string pathLoadFileName = "./";
+    string pathLoadFileName = "";
     pathLoadFileName = pathLoadFileName.append(mStrLoadAtlasFromFile);
     pathLoadFileName = pathLoadFileName.append(".osa");
 

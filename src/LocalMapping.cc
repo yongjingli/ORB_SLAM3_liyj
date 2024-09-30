@@ -30,6 +30,28 @@
 namespace ORB_SLAM3
 {
 
+// mpSystem(pSys): 保存了对 SLAM 系统对象的引用。
+// mbMonocular(bMonocular): 标记当前的 SLAM 系统是否使用单目相机。
+// mbInertial(bInertial): 标记当前的 SLAM 系统是否使用惯性测量单元(IMU)。
+// mbResetRequested(false): 标记是否已经请求重置 SLAM 系统。
+// mbResetRequestedActiveMap(false): 标记是否已经请求重置当前地图。
+// mbFinishRequested(false): 标记是否已经请求结束 SLAM 系统。
+// mbFinished(true): 标记 SLAM 系统是否已经结束。
+// mpAtlas(pAtlas): 保存了对地图管理器对象的引用。
+// bInitializing(false): 标记 SLAM 系统是否正在初始化。
+// mbAbortBA(false): 标记是否已经取消了当前的束调整(BA)过程。
+// mbStopped(false): 标记 SLAM 系统是否已经停止。
+// mbStopRequested(false): 标记是否已经请求停止 SLAM 系统。
+// mbNotStop(false): 标记 SLAM 系统是否不应该被停止。
+// mbAcceptKeyFrames(true): 标记是否应该接受新的关键帧。
+// mIdxInit(0): 初始化 SLAM 系统的索引。
+// mScale(1.0): 初始化地图的尺度为 1.0。
+// mInitSect(0): 初始化当前的初始化部分为 0。
+// mbNotBA1(true): 标记是否应该执行第一次束调整。
+// mbNotBA2(true): 标记是否应该执行第二次束调整。
+// mIdxIteration(0): 初始化迭代索引为 0。
+// infoInertial(Eigen::MatrixXd::Zero(9,9)): 初始化 9x9 大小的惯性信息矩阵为零矩阵。
+
 LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, bool bInertial, const string &_strSeqName):
     mpSystem(pSys), mbMonocular(bMonocular), mbInertial(bInertial), mbResetRequested(false), mbResetRequestedActiveMap(false), mbFinishRequested(false), mbFinished(true), mpAtlas(pAtlas), bInitializing(false),
     mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true),
@@ -324,7 +346,7 @@ void LocalMapping::ProcessNewKeyFrame()
                 }
                 else // this can only happen for new stereo points inserted by the Tracking
                 {
-                    mlpRecentAddedMapPoints.push_back(pMP);
+                    mlpRecentAddedMapPoints.push_back(pMP);  // 存储了最近添加到地图中的地图点
                 }
             }
         }

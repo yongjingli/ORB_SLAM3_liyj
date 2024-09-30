@@ -41,6 +41,12 @@ void LoadIMU(const string &strImuPath, vector<double> &vTimeStamps, vector<cv::P
 
 int main(int argc, char **argv)
 {
+    // 输入包括词典、配置文件、图像文件位置和时间戳信息和保存文件的位置
+    // "${workspaceFolder}/Vocabulary/ORBvoc.txt",
+    // "${workspaceFolder}/Examples/Stereo-Inertial/EuRoC.yaml",
+    // "/home/pxn-lyj/Egolee/data/MH_01_easy",
+    // "${workspaceFolder}/Examples/Stereo-Inertial/EuRoC_TimeStamps/MH01.txt",
+    // "mh01_results",
     if(argc < 5)
     {
         cerr << endl << "Usage: ./stereo_inertial_euroc path_to_vocabulary path_to_settings path_to_sequence_folder_1 path_to_times_file_1 (path_to_image_folder_2 path_to_times_file_2 ... path_to_image_folder_N path_to_times_file_N) " << endl;
@@ -50,7 +56,7 @@ int main(int argc, char **argv)
     const int num_seq = (argc-3)/2;
     cout << "num_seq = " << num_seq << endl;
     bool bFileName= (((argc-3) % 2) == 1);
-    string file_name;
+    string file_name;                             // 保存结果位置   
     if (bFileName)
     {
         file_name = string(argv[argc-1]);
@@ -58,15 +64,15 @@ int main(int argc, char **argv)
     }
 
     // Load all sequences:
-    int seq;
-    vector< vector<string> > vstrImageLeft;
+    int seq;                                      // 记录输入的视频数量
+    vector< vector<string> > vstrImageLeft;      // 记录图片的路径
     vector< vector<string> > vstrImageRight;
-    vector< vector<double> > vTimestampsCam;
-    vector< vector<cv::Point3f> > vAcc, vGyro;
-    vector< vector<double> > vTimestampsImu;
-    vector<int> nImages;
-    vector<int> nImu;
-    vector<int> first_imu(num_seq,0);
+    vector< vector<double> > vTimestampsCam;     //记录图片的时间戳
+    vector< vector<cv::Point3f> > vAcc, vGyro;   // 记录imu的加速度和角速度
+    vector< vector<double> > vTimestampsImu;     //记录imu的时间戳
+    vector<int> nImages;                         // 每段视频里图片的数量
+    vector<int> nImu;                            // 每段视频里imu的数量
+    vector<int> first_imu(num_seq,0);            // 每段视频里第一个imu的下标
 
     vstrImageLeft.resize(num_seq);
     vstrImageRight.resize(num_seq);
@@ -77,7 +83,7 @@ int main(int argc, char **argv)
     nImages.resize(num_seq);
     nImu.resize(num_seq);
 
-    int tot_images = 0;
+    int tot_images = 0;     // 读取得到上述变量的信息
     for (seq = 0; seq<num_seq; seq++)
     {
         cout << "Loading images for sequence " << seq << "...";
@@ -107,13 +113,15 @@ int main(int argc, char **argv)
         }
 
         // Find first imu to be considered, supposing imu measurements start first
-
+        // 找出最接近第一张图像的imu信息的idx位置，并且时间戳在图像的前面
         while(vTimestampsImu[seq][first_imu[seq]]<=vTimestampsCam[seq][0])
             first_imu[seq]++;
         first_imu[seq]--; // first imu measurement to be considered
+
+        cout << "first_imu.size:" <<first_imu.size() << "first_imu:" << first_imu[0] << endl;     // 查看第一个imu的idx
     }
 
-    // Read rectification parameters
+    // Read rectification parameters   读取配置文件
     cv::FileStorage fsSettings(argv[2], cv::FileStorage::READ);
     if(!fsSettings.isOpened())
     {
@@ -121,7 +129,7 @@ int main(int argc, char **argv)
         return -1;
     }
 
-    // Vector for tracking time statistics
+    // Vector for tracking time statistics 统计每帧的处理时间
     vector<float> vTimesTrack;
     vTimesTrack.resize(tot_images);
 
@@ -129,10 +137,12 @@ int main(int argc, char **argv)
     cout.precision(17);
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
-    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::IMU_STEREO, false);
+// ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::IMU_STEREO, false);
+    ORB_SLAM3::System SLAM(argv[1],argv[2],ORB_SLAM3::System::IMU_STEREO, true);   // 修改为true进行可视化 初始化slam系统
 
     cv::Mat imLeft, imRight;
-    for (seq = 0; seq<num_seq; seq++)
+    // 开始处理,按照视频数量的方式
+    for (seq = 0; seq<num_seq; seq++)     
     {
         // Seq loop
         vector<ORB_SLAM3::IMU::Point> vImuMeas;
@@ -166,6 +176,7 @@ int main(int argc, char **argv)
             // Load imu measurements from previous frame
             vImuMeas.clear();
 
+            // 将两帧间的imu都收集起来
             if(ni>0)
                 while(vTimestampsImu[seq][first_imu[seq]]<=vTimestampsCam[seq][ni]) // while(vTimestampsImu[first_imu]<=vTimestampsCam[ni])
                 {
@@ -199,7 +210,7 @@ int main(int argc, char **argv)
 
             vTimesTrack[ni]=ttrack;
 
-            // Wait to load the next frame
+            // Wait to load the next frame，如果处理速度比两帧间的时间快，那么等待一定时候，保持图像的帧率
             double T=0;
             if(ni<nImages[seq]-1)
                 T = vTimestampsCam[seq][ni+1]-tframe;
@@ -210,6 +221,8 @@ int main(int argc, char **argv)
                 usleep((T-ttrack)*1e6); // 1e6
         }
 
+        
+        // 重新开始下段视频
         if(seq < num_seq - 1)
         {
             cout << "Changing the dataset" << endl;
@@ -223,13 +236,13 @@ int main(int argc, char **argv)
     SLAM.Shutdown();
 
 
-    // Save camera trajectory
+    // Save camera trajectory 保存运动轨迹和关键帧的运动轨迹
     if (bFileName)
     {
         const string kf_file =  "kf_" + string(argv[argc-1]) + ".txt";
         const string f_file =  "f_" + string(argv[argc-1]) + ".txt";
-        SLAM.SaveTrajectoryEuRoC(f_file);
-        SLAM.SaveKeyFrameTrajectoryEuRoC(kf_file);
+        SLAM.SaveTrajectoryEuRoC(f_file);                                       // 保存运动轨迹
+        SLAM.SaveKeyFrameTrajectoryEuRoC(kf_file);                              // 保存关键帧的运动轨迹
     }
     else
     {
@@ -293,6 +306,12 @@ void LoadIMU(const string &strImuPath, vector<double> &vTimeStamps, vector<cv::P
                 s.erase(0, pos + 1);
             }
             item = s.substr(0, pos);
+
+            // if (!s.empty() && s.back() == '\r') {
+            //     item = item.substr(0, item.length() - 1);
+            // } else {
+            //     item = item;
+            // }
             data[6] = stod(item);
 
             vTimeStamps.push_back(data[0]/1e9);

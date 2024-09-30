@@ -119,8 +119,8 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
 #endif
-    thread threadLeft(&Frame::ExtractORB,this,0,imLeft,0,0);
-    thread threadRight(&Frame::ExtractORB,this,1,imRight,0,0);
+    thread threadLeft(&Frame::ExtractORB,this,0,imLeft,0,0);  // mvKeys,mDescriptors 左图的特征点和描述
+    thread threadRight(&Frame::ExtractORB,this,1,imRight,0,0);  // mvKeysRight,mDescriptorsRight 右图的特征点和描述
     threadLeft.join();
     threadRight.join();
 #ifdef REGISTER_TIMES
@@ -133,12 +133,12 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
     if(mvKeys.empty())
         return;
 
-    UndistortKeyPoints();
+    UndistortKeyPoints();    // mvKeysUn 左图矫正后的关键点坐标保存位置
 
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_StartStereoMatches = std::chrono::steady_clock::now();
 #endif
-    ComputeStereoMatches();
+    ComputeStereoMatches();   // 得到左图关键点的深度和右图对应的下标(在mvKeys上进行的匹配, 滑动窗口的方式插值得到亚像素的视差) mvuRight mvDepth 
 #ifdef REGISTER_TIMES
     std::chrono::steady_clock::time_point time_EndStereoMatches = std::chrono::steady_clock::now();
 
@@ -154,13 +154,16 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
     // This is done only for the first Frame (or after a change in the calibration)
     if(mbInitialComputations)
     {
-        ComputeImageBounds(imLeft);
+        ComputeImageBounds(imLeft);   // 得到图像边界mnMaxX mnMinX mnMaxY mnMinY
+        
+        // Keypoints are assigned to cells in a grid to reduce matching complexity when projecting MapPoints.
+        // std::vector<std::size_t> mGrid[FRAME_GRID_COLS][FRAME_GRID_ROWS];
+        // 将左图的关键点坐标点映射到mGrid中，降低进行地图点投影时的复杂度
 
-        mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/(mnMaxX-mnMinX);
+        mfGridElementWidthInv=static_cast<float>(FRAME_GRID_COLS)/(mnMaxX-mnMinX);   // 方便将图像坐标转为grid坐标
         mfGridElementHeightInv=static_cast<float>(FRAME_GRID_ROWS)/(mnMaxY-mnMinY);
 
-
-
+        // 得到相机内参相关
         fx = K.at<float>(0,0);
         fy = K.at<float>(1,1);
         cx = K.at<float>(0,2);
@@ -172,7 +175,7 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
     }
 
     mb = mbf/fx;
-
+    // 判断是否存在上一帧, 有则保存速度 mVw = Vwb;  mbHasVelocity = true;
     if(pPrevF)
     {
         if(pPrevF->HasVelocity())
@@ -183,6 +186,7 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
         mVw.setZero();
     }
 
+    // 创建一个新的互斥锁 mpMutexImu,用于保护 ORB-SLAM3 系统中 IMU 数据的共享访问
     mpMutexImu = new std::mutex();
 
     //Set no stereo fisheye information
@@ -194,7 +198,7 @@ Frame::Frame(const cv::Mat &imLeft, const cv::Mat &imRight, const double &timeSt
     monoLeft = -1;
     monoRight = -1;
 
-    AssignFeaturesToGrid();
+    AssignFeaturesToGrid();   // Nleft = -1, 将畸变矫正后的关键点位置 mvKeysUn[i]填到mGrid中(每个位置为vector), 数值为左关键点的ind
 }
 
 Frame::Frame(const cv::Mat &imGray, const cv::Mat &imDepth, const double &timeStamp, ORBextractor* extractor,ORBVocabulary* voc, cv::Mat &K, cv::Mat &distCoef, const float &bf, const float &thDepth, GeometricCamera* pCamera,Frame* pPrevF, const IMU::Calib &ImuCalib)
@@ -316,11 +320,11 @@ Frame::Frame(const cv::Mat &imGray, const double &timeStamp, ORBextractor* extra
 #endif
 
 
-    N = mvKeys.size();
+    N = mvKeys.size();  // 类变量，左图特征点的数量
     if(mvKeys.empty())
         return;
 
-    UndistortKeyPoints();
+    UndistortKeyPoints();  // 对左图的特诊点进行畸变矫正,保存在mvKeysUn
 
     // Set no stereo information
     mvuRight = vector<float>(N,-1);
@@ -388,7 +392,7 @@ void Frame::AssignFeaturesToGrid()
     const int nCells = FRAME_GRID_COLS*FRAME_GRID_ROWS;
 
     int nReserve = 0.5f*N/(nCells);
-
+    // mGrid mGridRight 的大小为FRAME_GRID_COLS * FRAME_GRID_ROWS, 每个元素都是一个vector，用来存放特征点的ind
     for(unsigned int i=0; i<FRAME_GRID_COLS;i++)
         for (unsigned int j=0; j<FRAME_GRID_ROWS;j++){
             mGrid[i][j].reserve(nReserve);
@@ -398,7 +402,7 @@ void Frame::AssignFeaturesToGrid()
         }
 
 
-
+    // N为-1的情况下,将畸变矫正后的GridPosX,nGridPosY填到mGrid中,数值为关键点的ind
     for(int i=0;i<N;i++)
     {
         const cv::KeyPoint &kp = (Nleft == -1) ? mvKeysUn[i]
@@ -815,13 +819,13 @@ void Frame::ComputeStereoMatches()
 
     const int thOrbDist = (ORBmatcher::TH_HIGH+ORBmatcher::TH_LOW)/2;
 
-    const int nRows = mpORBextractorLeft->mvImagePyramid[0].rows;
+    const int nRows = mpORBextractorLeft->mvImagePyramid[0].rows;  // 图像金字塔图像(最高分辨率)的行数
 
     //Assign keypoints to row table
-    vector<vector<size_t> > vRowIndices(nRows,vector<size_t>());
+    vector<vector<size_t> > vRowIndices(nRows,vector<size_t>());  // 每行为一个vector
 
     for(int i=0; i<nRows; i++)
-        vRowIndices[i].reserve(200);
+        vRowIndices[i].reserve(200);    // 每行vector的size为200.用于存储右图中可能匹配的关键点
 
     const int Nr = mvKeysRight.size();
 
@@ -829,12 +833,12 @@ void Frame::ComputeStereoMatches()
     {
         const cv::KeyPoint &kp = mvKeysRight[iR];
         const float &kpY = kp.pt.y;
-        const float r = 2.0f*mvScaleFactors[mvKeysRight[iR].octave];
+        const float r = 2.0f*mvScaleFactors[mvKeysRight[iR].octave]; // 当前关键点所在的尺度层所在的尺度因子
         const int maxr = ceil(kpY+r);
         const int minr = floor(kpY-r);
 
         for(int yi=minr;yi<=maxr;yi++)
-            vRowIndices[yi].push_back(iR);
+            vRowIndices[yi].push_back(iR);  // 关键点所在行的范围内加入该关键点点
     }
 
     // Set limits for search
@@ -846,7 +850,7 @@ void Frame::ComputeStereoMatches()
     vector<pair<int, int> > vDistIdx;
     vDistIdx.reserve(N);
 
-    for(int iL=0; iL<N; iL++)
+    for(int iL=0; iL<N; iL++)   // 对左图的关键点进行遍历计算
     {
         const cv::KeyPoint &kpL = mvKeys[iL];
         const int &levelL = kpL.octave;
@@ -869,7 +873,7 @@ void Frame::ComputeStereoMatches()
 
         const cv::Mat &dL = mDescriptors.row(iL);
 
-        // Compare descriptor to right keypoints
+        // Compare descriptor to right keypoints 找出右图中的最佳匹配关键点
         for(size_t iC=0; iC<vCandidates.size(); iC++)
         {
             const size_t iR = vCandidates[iC];
@@ -893,7 +897,7 @@ void Frame::ComputeStereoMatches()
             }
         }
 
-        // Subpixel match by correlation
+        // Subpixel match by correlation 进行亚像素的匹配 bestDist为特征描述符的距离 bestIdxR为右图关键点的下标
         if(bestDist<thOrbDist)
         {
             // coordinates in image pyramid at keypoint scale
@@ -903,8 +907,9 @@ void Frame::ComputeStereoMatches()
             const float scaledvL = round(kpL.pt.y*scaleFactor);
             const float scaleduR0 = round(uR0*scaleFactor);
 
-            // sliding window search
+            // sliding window search 通过滑窗的方式得到亚像素的匹配结果
             const int w = 5;
+            // 左图的窗口图像 左右上下为5的窗口大小
             cv::Mat IL = mpORBextractorLeft->mvImagePyramid[kpL.octave].rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduL-w,scaleduL+w+1);
 
             int bestDist = INT_MAX;
@@ -918,6 +923,7 @@ void Frame::ComputeStereoMatches()
             if(iniu<0 || endu >= mpORBextractorRight->mvImagePyramid[kpL.octave].cols)
                 continue;
 
+            // 对右图的关键点进行滑窗 左右5个像素+自身位置, 窗口的大小为11*11,得到11个匹配的分数,记录到vDists
             for(int incR=-L; incR<=+L; incR++)
             {
                 cv::Mat IR = mpORBextractorRight->mvImagePyramid[kpL.octave].rowRange(scaledvL-w,scaledvL+w+1).colRange(scaleduR0+incR-w,scaleduR0+incR+w+1);
@@ -935,18 +941,18 @@ void Frame::ComputeStereoMatches()
             if(bestincR==-L || bestincR==L)
                 continue;
 
-            // Sub-pixel match (Parabola fitting)
+            // Sub-pixel match (Parabola fitting) 对最佳的匹配位置进行插值
             const float dist1 = vDists[L+bestincR-1];
-            const float dist2 = vDists[L+bestincR];
+            const float dist2 = vDists[L+bestincR];    // 最佳匹配位置
             const float dist3 = vDists[L+bestincR+1];
 
-            const float deltaR = (dist1-dist3)/(2.0f*(dist1+dist3-2.0f*dist2));
+            const float deltaR = (dist1-dist3)/(2.0f*(dist1+dist3-2.0f*dist2)); // 插值残差
 
             if(deltaR<-1 || deltaR>1)
                 continue;
 
             // Re-scaled coordinate
-            float bestuR = mvScaleFactors[kpL.octave]*((float)scaleduR0+(float)bestincR+deltaR);
+            float bestuR = mvScaleFactors[kpL.octave]*((float)scaleduR0+(float)bestincR+deltaR);  // 插值后在原图上的坐标
 
             float disparity = (uL-bestuR);
 
@@ -954,21 +960,21 @@ void Frame::ComputeStereoMatches()
             {
                 if(disparity<=0)
                 {
-                    disparity=0.01;
-                    bestuR = uL-0.01;
+                    disparity=0.01;  // 视差
+                    bestuR = uL-0.01;  
                 }
-                mvDepth[iL]=mbf/disparity;
-                mvuRight[iL] = bestuR;
-                vDistIdx.push_back(pair<int,int>(bestDist,iL));
+                mvDepth[iL]=mbf/disparity;    // 深度
+                mvuRight[iL] = bestuR;        // 右图的匹配位置
+                vDistIdx.push_back(pair<int,int>(bestDist,iL));   // 记录最佳的匹配分数和左图的下标
             }
         }
     }
 
-    sort(vDistIdx.begin(),vDistIdx.end());
-    const float median = vDistIdx[vDistIdx.size()/2].first;
-    const float thDist = 1.5f*1.4f*median;
+    sort(vDistIdx.begin(),vDistIdx.end());  // 从小到大进行排序
+    const float median = vDistIdx[vDistIdx.size()/2].first;   // 得到中间排序的匹配分数
+    const float thDist = 1.5f*1.4f*median;      // 根据中间的匹配分数对左图的点进行过滤
 
-    for(int i=vDistIdx.size()-1;i>=0;i--)
+    for(int i=vDistIdx.size()-1;i>=0;i--)    // 小于中间匹配分数的深度进行去除
     {
         if(vDistIdx[i].first<thDist)
             break;
